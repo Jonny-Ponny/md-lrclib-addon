@@ -90,7 +90,7 @@ class LrcLib(MetadataFetcher):
                 raise RuntimeError(f"No lyrics found for track {song_id}")
             track = {
                 "unsyncedLyrics": data.get("plainLyrics", ""),
-                "syncedLyrics": data.get("syncedLyrics", ""),
+                "lyrics": data.get("syncedLyrics", ""),
             }
             return self._clean_dict(track)
         except Exception as e:
