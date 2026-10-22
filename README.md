@@ -1,53 +1,69 @@
 # md-lrclib-addon
 
-Addon for [metadata-docker](https://github.com/Jonny-Ponny/metadata-docker) that uses the [LrcLib](https://lrclib.net/) API to fetch lyrics (both plain text and synced LRC) for songs.
+Addon for [metadata-docker](https://github.com/Jonny-Ponny/metadata-docker) that uses the [LrcLib](https://lrclib.net/) API to fetch plain-text and synced (LRC) lyrics for individual songs.
 
-This addon supports single‑song search and fetch only.
+Current addon version: `1.1.0`. Source: [md-lrclib-addon](https://github.com/Jonny-Ponny/md-lrclib-addon).
+
+This addon supports single-song search and fetch only. Album search and album fetch are intentionally not implemented because LrcLib does not provide a dedicated album lyrics endpoint.
 
 ## Addon structure
 
-This addon follows the same base class structure as described in the [metadata-docker](https://github.com/Jonny-Ponny/metadata-docker). It inherits from `MetadataFetcher` and implements two core methods:
+The addon inherits from `MetadataFetcher` and implements two methods:
 
-- `search_songs(query, limit)` - returns a list of matching songs with basic metadata.
-- `fetch_song_metadata(song_id)` - retrieves full lyrics (plain and synced) for a given song ID.
+- `search_songs(query, limit=5)` - returns matching songs with the LrcLib track ID and basic display metadata.
+- `fetch_song_metadata(song_id)` - retrieves plain and synced lyrics for one LrcLib track.
+
+It also sets the current metadata-docker addon attributes: `name`, `id`, `description`, `version`, `github`, and `required_env_vars`.
 
 ## Environment Variables
 
 | Variable | Purpose | Allowed Values | Default |
 |----------|---------|----------------|---------|
-| `MD_LRCLIB_REQUEST_DELAY` | Delay in seconds between API requests. Helps avoid hitting rate limits. | Float | `0.0` |
+| `MD_LRCLIB_REQUEST_DELAY` | Delay in seconds between API requests. Set to `0` to disable. Invalid values fall back to `0.0`. | Float | `0.0` |
+
+The delay state is class-level because metadata-docker creates a new fetcher instance for each API request. This makes the delay apply across requests, not just within one instance.
 
 ## Implementation Notes
 
-- Query normalisation: If a search query returns zero results, the addon automatically retries with a normalized version where punctuation (e.g., `.`, `/`, `,`, `'`) is removed and multiple spaces are collapsed. This improves the chance of finding songs that have punctuation in their titles.
-- Album support: Album search and fetch are intentionally disabled because LrcLib does not provide a dedicated album lyrics endpoint.
+- **Query normalisation**: Search first uses the query exactly as entered. If it returns no results, the addon retries with punctuation removed and whitespace collapsed, while preserving word boundaries. Apostrophes are removed so contractions such as `don't` become `dont` instead of `don t`.
+- **Search results**: Include the LrcLib track ID, title, artist, and the album name when available. A display-only `extraInfo` value shows the album, duration, and whether the track is instrumental.
+- **Lyrics-only fetch**: Fetched metadata contains only the lyrics fields and display-only `extraInfo`. It does not return title, artist, or album fields, so applying it will not overwrite existing tags with data from LrcLib.
+- **Missing lyrics**: If a track has neither plain nor synced lyrics, fetch raises a clear error. Instrumental tracks are reported as instrumental in the error message.
+- **Limits**: Search results are capped at 50. A non-positive `limit` returns no results.
+- **HTTP handling**: Requests use a 20-second timeout and a versioned User-Agent with the GitHub URL. Temporary `429`/`503` responses are retried up to two times, respecting a numeric `Retry-After` header.
+- **Album support**: `search_albums` and `fetch_album_metadata` are not overridden, so metadata-docker correctly reports that album operations are unsupported.
 
 ## Metadata Fields
 
-The addon returns the following fields for search results and fetched song metadata:
-
 ### Search results (`search_songs`)
 
-- `id` - LrcLib track ID (string)
+- `id` - LrcLib track ID (string), passed back to `fetch_song_metadata`
 - `title` - track name
 - `artist` - artist name
+- `album` - album name, when available
+- `extraInfo` - display-only album, duration, and instrumental status
 
 ### Fetched song metadata (`fetch_song_metadata`)
 
-All search fields plus:
+- `unsyncedLyrics` - plain-text lyrics, when available
+- `lyrics` - synced lyrics in LRC format, when available
+- `extraInfo` - display-only album and duration
 
-- `unsyncedLyrics` - plain text lyrics (if available)
-- `syncedLyrics` - LRC formatted synced lyrics (if available)
-
-If lyrics are not available, the respective field will be an empty string.
+Unavailable lyric fields are omitted rather than returned as empty strings. At least one lyrics field must be available, otherwise the fetch fails. `extraInfo` is never offered as a tag and is never written to a file.
 
 ## Using This Addon
 
-1. Place the addon file `LrcLib.py` and `LrcLib_requirements.txt` in metadata-docker `/addons` folder.
-2. Restart the container. The addon will be discovered automatically.
-3. Optionally, set the `MD_LRCLIB_REQUEST_DELAY` environment variable in your `docker-compose.yml`.
+1. Place `LrcLib.py` and `LrcLib_requirements.txt` in the metadata-docker `/addons` folder.
+2. Restart the container. The addon is discovered automatically.
+3. Optionally, set `MD_LRCLIB_REQUEST_DELAY` in your `docker-compose.yml`, for example:
+
+```yaml
+environment:
+  MD_LRCLIB_REQUEST_DELAY: "0.5"
+```
 
 ## Troubleshooting
 
-- **No results**: The addon automatically retries with punctuation removed. If that still fails, the query may not exist in the LrcLib database.
-- **Fetch fails**: The song ID may be incorrect or the track may not have lyrics on LrcLib.
+- **No results**: Try searching with both the track title and artist name. The addon automatically retries with punctuation removed if the exact query finds nothing.
+- **Fetch fails**: The track may be instrumental, may not have lyrics in LrcLib, or the ID may be invalid.
+- **Temporary API errors**: LrcLib can return `429` or `503` responses when busy. The addon retries briefly; increasing `MD_LRCLIB_REQUEST_DELAY` can help avoid rate limiting.
